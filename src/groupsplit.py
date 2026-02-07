@@ -21,38 +21,18 @@ from tabulate import tabulate
 LOGGING_DISABELED = 100
 log_levels = [LOGGING_DISABELED, logging.CRITICAL, logging.ERROR,
               logging.WARNING, logging.INFO, logging.DEBUG]
-# Adapted from:
-# https://docs.python.org/2/howto/logging.html#configuring-logging
-# create logger
-logger = logging.getLogger(__name__)
 
-# create console handler and set level to debug
+logger = logging.getLogger(__name__)
 ch = logging.StreamHandler()
 ch.setLevel(logging.DEBUG)
-
-# create formatter
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
-# add formatter to ch
 ch.setFormatter(formatter)
-
-# add ch to logger
 logger.addHandler(ch)
 logging.basicConfig(format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p')
 
 def split(total, num_people):
-    """
-    Splits a total to the nearest whole cent and remainder
-    Total is a Money() type so no need to worry about floating point errors
-    return (2-tuple): base amount owed, remainder of cents which couldn't be evenly split
-
-    Example: >>> split(1.00, 6) 
-    (0.16, 0.04)
-    """
     base = total * 100 // num_people / 100
     extra = total - num_people * base
-    assert base * num_people + extra == total, "InternalError:" + \
-    " something doesnt add up here: %d * %d + %d != %d" %(base, num_people, extra, total)
     return base, extra
 
 def do_hash(msg):
@@ -61,9 +41,6 @@ def do_hash(msg):
     return m.hexdigest()
 
 class Splitwise:
-    """
-    Client for communicating with Splitwise api
-    """
     def __init__(self, api_client='oauth_client.pkl'):
         if os.path.isfile(api_client):
             with open(api_client, 'rb') as oauth_pkl:
@@ -75,54 +52,29 @@ class Splitwise:
         if os.path.isfile("consumer_oauth.json"):
             with open("consumer_oauth.json", 'rb') as oauth_file:
                 consumer = json.load(oauth_file)
-                ckey = consumer['consumer_key']
-                csecret = consumer['consumer_secret']
+                self.ckey = consumer['consumer_key']
+                self.csecret = consumer['consumer_secret']
         else:
-            with open("consumer_oauth.json", 'wb') as oauth_file:
-                json.dump({'consumer_key':'YOUR KEY HERE',
-                           'consumer_secret':'YOUR SECRET HERE'}, oauth_file)
-            exit("go to https://secure.splitwise.com/oauth_clients to obtain your keys."+
-                 "place them in consumer_oauth.json")
-        self.ckey = ckey
-        self.csecret = csecret
+            exit("Please ensure consumer_oauth.json exists with your keys.")
 
     def get_client(self):
         self.get_client_auth()
         client = oauthlib.oauth1.Client(self.ckey, client_secret=self.csecret)
-        uri, headers, body = client.sign("https://secure.splitwise.com/api/v3.0/get_request_token",
-                                         http_method='POST')
+        uri, headers, body = client.sign("https://secure.splitwise.com/api/v3.0/get_request_token", http_method='POST')
         r = requests.post(uri, headers=headers, data=body)
         resp = r.text.split('&')
         oauth_token = resp[0].split('=')[1]
         oauth_secret = resp[1].split('=')[1]
         uri = "https://secure.splitwise.com/authorize?oauth_token=%s" % oauth_token
-
         webbrowser.open_new(uri)
-
-        # proc = subprocess.Popen(['python', 'server.py'], stdout=subprocess.PIPE)
-        # stdout, stderr = proc.communicate()
-        # if stderr:
-        #     exit(stderr)
-
-        verifier_input = input('Copy the oauth verifier from the success page in the browser window : ')
-
-        client = oauthlib.oauth1.Client(self.ckey, client_secret=self.csecret,
-                                        resource_owner_key=oauth_token,
-                                        resource_owner_secret=oauth_secret,
-                                        verifier=verifier_input)
-                                        #verifier=stdout.strip()) #bYpMPennhuz6bqMRZXd8
-
-        uri, headers, body = client.sign("https://secure.splitwise.com/api/v3.0/get_access_token",
-                                         http_method='POST')
+        verifier_input = input('Copy the oauth verifier from the browser: ')
+        client = oauthlib.oauth1.Client(self.ckey, client_secret=self.csecret, resource_owner_key=oauth_token, resource_owner_secret=oauth_secret, verifier=verifier_input)
+        uri, headers, body = client.sign("https://secure.splitwise.com/api/v3.0/get_access_token", http_method='POST')
         resp = requests.post(uri, headers=headers, data=body)
         tokens = resp.text.split('&')
         oauth_token = tokens[0].split('=')[1]
         oauth_secret = tokens[1].split('=')[1]
-        client = oauthlib.oauth1.Client(self.ckey, client_secret=self.csecret,
-                                        resource_owner_key=oauth_token,
-                                        resource_owner_secret=oauth_secret,
-                                        verifier=verifier_input)
-                                        #verifier=stdout.strip())
+        client = oauthlib.oauth1.Client(self.ckey, client_secret=self.csecret, resource_owner_key=oauth_token, resource_owner_secret=oauth_secret, verifier=verifier_input)
         with open('oauth_client.pkl', 'wb') as pkl:
             pickle.dump(client, pkl)
         self.client = client
@@ -144,66 +96,32 @@ class Splitwise:
 
     def post_expense(self, uri):
         resp = self.api_call(uri, 'POST')
-        if resp["errors"]:
-            sys.stderr.write( "URI:")
-            sys.stderr.write(uri)
-            pprint(resp, stream=sys.stderr)
+        if resp.get("errors"):
+            print(f"Error: {resp['errors']}")
         else:
             sys.stdout.write(".")
             sys.stdout.flush()
 
-    def delete_expense(self, expense_id):
-        return self.api_call("https://secure.splitwise.com/api/v3.0/delete_expense/%s" % expense_id, 'POST')
-
-    def get_expenses(self, after_date="", limit=0, allow_deleted=True):
-        params = {'limit': limit, "updated_after": after_date}
-        paramsStr = urllib.urlencode(params)
-        resp = self.api_call("https://secure.splitwise.com/api/v3.0/get_expenses?%s" % (paramsStr), 'GET')
-        if not allow_deleted:
-            resp['expenses'] = [exp for exp in resp['expenses'] if exp['deleted_at'] is None]
-        return resp['expenses']
-
 class CsvSettings():
     def __init__(self, rows):
-        print("These are the first two rows of your csv")
+        print("First two rows of CSV:")
         print("\n".join([str(t) for t in rows[0:2]]))
-        print("Colnum numbers start at 0")
-        self.date_col = input("Which column has the date?")
-        self.amount_col = input("Which column has the amount?")
-        self.desc_col = input("Which column has the description?")
-        self.has_title_row = input("Does first row have titles? [Y/n]").lower() != 'n'
-        self.newest_transaction = ''
-        while True:
-            try:
-                self.local_currency = input("What currency were these transactions made in?").upper()
-                test = Money("1.00", self.local_currency)  #pylint: disable=W0612
-            except ValueError as err:
-                print(err)
-                print("Try again...")
-            else:
-                break
-        self.remember = input("Remember these settings? [Y/n]").lower() != 'n'
+        self.date_col = input("Date column index? (0 for date): ")
+        self.amount_col = input("Amount column index? (2 for Amount): ")
+        self.desc_col = input("Desc column index? (1 for item): ")
+        self.has_title_row = input("Titles in first row? [Y/n]").lower() != 'n'
+        self.local_currency = input("Currency? (e.g. AED): ").upper()
+        self.remember = input("Remember settings? [Y/n]").lower() != 'n'
 
     def __del__(self):
-        if self.remember:
+        if hasattr(self, 'remember') and self.remember:
             with open("csv_settings.pkl", "wb") as pkl:
                 pickle.dump(self, pkl)
 
-    def record_newest_transaction(self, rows):
-        if self.has_title_row:
-            self.newest_transaction = do_hash(str(rows[1]))
-        else:
-            self.newest_transaction = do_hash(str(rows[0]))
-
-
 class SplitGenerator():
     def __init__(self, options, args, api):
-        csv_file = args[0]
-        group_name = args[1]
-        self.api = api
-        self.options = options
-        self.args = args
-        with open(csv_file, 'r') as csvfile:
+        self.api, self.options, self.args = api, options, args
+        with open(args[0], 'r') as csvfile:
             reader = csv.reader(csvfile)
             self.rows = [x for x in reader]
 
@@ -214,103 +132,60 @@ class SplitGenerator():
             self.csv = CsvSettings(self.rows)
 
         if self.csv.has_title_row:
+            self.header = self.rows[0]
             self.rows = self.rows[1:]
 
         self.make_transactions()
-        self.csv.record_newest_transaction(self.rows)
-        self.get_group(group_name)
+        self.get_group(args[1])
         self.splits = []
         self.ask_for_splits()
 
     def make_transactions(self):
-        """
-        Consume the row data from the csv file into a format which is easy to upload to splitwise
-        Filter out all deposits (positive amounts)
-        **change csvDateFormat to the format in your csv if necessary** 
-        Further reading on date formats: https://docs.python.org/2/library/datetime.html#strftime-and-strptime-behavior
-        """
-        csvDateFormat="%m/%d/%Y"
+        # UPDATED: Matches the DD/MM/YYYY format in your allconsol.csv
+        csvDateFormat = "%d/%m/%Y"
         self.transactions = []
-        for r in self.rows:
-            # if not self.options.try_all and do_hash(str(r)) == self.csv.newest_transaction:
-            #    break
-            if float(r[int(self.csv.amount_col)]) > 0:
+        for i, r in enumerate(self.rows):
+            if r[int(self.csv.amount_col)] and float(r[int(self.csv.amount_col)]) > 0:
                 self.transactions.append({
                     "date": datetime.strptime(r[int(self.csv.date_col)], csvDateFormat).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "amount": Money(r[int(self.csv.amount_col)], self.csv.local_currency),
-                    "desc": re.sub(r'\s+', ' ', r[int(self.csv.desc_col)])
-                }
-                )
+                    "desc": re.sub(r'\s+', ' ', r[int(self.csv.desc_col)]),
+                    "original_row_index": i
+                })
 
     def get_group(self, name):
-        """
-        Wrapper around splitwise api for retreiving groups
-        by name. Handles error cases: multiple groups with same name, 
-        no group found, group has no members.
-        
-        name: the name of your Splitwise group (case insensitive)
-        """
-        num_found = 0
-        gid = ''
-        members = {}
         groups = self.api.get_groups()
         for group in groups:
             if group['name'].lower() == name.lower():
-                gid = group['id']
-                members = [m['id'] for m in group['members'] if m['id'] != self.api.get_id()]
-                num_found += 1
-
-        if num_found > 1:
-            exit("More than 1 group found with name:" + name)
-        elif num_found < 1:
-            exit("No matching group with name:" + name)
-        elif len(members) < 1:
-            exit("No members in group with name:" + name)
-
-        self.members = members
-        self.gid = gid
+                self.gid = group['id']
+                return
+        exit(f"Group '{name}' not found.")
 
     def ask_for_splits(self):
-        """
-        Ask the user whether they would like to split a given expense and if so
-        add it to tee list of transactions to upload to Splitwise. Gets final
-        confirmation before returning.
-        """
-        print("Found {0} transactions".format(len(self.transactions)))
-        i = 0
-        for t in self.transactions:
-            if self.options.yes or input("%d: %s at %s $%s. Split? [y/N]" % (i, t['date'], t['desc'], t['amount'])).lower() == 'y':
+        for i, t in enumerate(self.transactions):
+            if self.options.yes or input(f"{i}: {t['date']} {t['desc']} {t['amount']}. Split? [y/N] ").lower() == 'y':
                 self.splits.append(t)
-
-        print("-" * 40)
-        print("Your Chosen Splits")
-        print("-" * 40)
-        print(tabulate( self.splits, headers={"date":"Date", "amount":"Amount", "desc":"Description"} ))
-
-        # Kill program if user doesn't want to submit splits
-        assert self.options.yes or input( "Confirm submission? [y/N]" ).lower() == 'y', "User canceled submission"
+        print(tabulate(self.splits, headers="keys"))
+        assert self.options.yes or input("Confirm? [y/N] ").lower() == 'y', "Canceled."
 
     def __getitem__(self, index):
         s = self.splits[index]
         one_cent = Money("0.01", self.csv.local_currency)
         
-        # DYNAMIC MEMBER SELECTION
-        # We look back at the original CSV row for this split
-        # Map IDs based on the "yes" columns in your allconsol.csv
-        # Replace the dummy IDs below with your friends' actual Splitwise IDs
+        # MAP COLUMN INDEXES TO IDS FROM YOUR TERMINAL OUTPUT
         ID_MAP = {
-            4: 123456,  # Nikhil's actual Splitwise ID
-            5: 789012,  # Rose's actual Splitwise ID
-            6: 345678   # Austin's actual Splitwise ID
+            4: 123456,  # Replace with Nikhil's ID
+            5: 789012,  # Replace with Rose's ID
+            6: 345678   # Replace with Austin's ID
         }
         
         active_members = []
-        original_row = self.rows[index]
-        for col_idx, sw_id in ID_MAP.items():
-            if original_row[col_idx].strip().lower() == 'yes':
+        row = self.rows[s["original_row_index"]]
+        for col, sw_id in ID_MAP.items():
+            if row[col].strip().lower() == 'yes':
                 active_members.append(sw_id)
 
-        num_people = len(active_members) + 1  # active friends + you
+        num_people = len(active_members) + 1
         base, extra = split(s['amount'], num_people)
         
         params = {
@@ -324,39 +199,40 @@ class SplitGenerator():
             "users__0__paid_share": s["amount"].amount,
             "users__0__owed_share": base.amount,
         }
-        
-        for i, member_id in enumerate(active_members):
-            params['users__%s__user_id' % (i+1)] = member_id
-            params['users__%s__paid_share' % (i+1)] = 0
-            params['users__%s__owed_share' % (i+1)] = (base + one_cent).amount if extra.amount > 0 else base.amount
+        for i, mid in enumerate(active_members):
+            params[f'users__{i+1}__user_id'] = mid
+            params[f'users__{i+1}__paid_share'] = 0
+            params[f'users__{i+1}__owed_share'] = (base + one_cent).amount if extra.amount > 0 else base.amount
             extra -= one_cent
             
-        paramsStr = urllib.parse.urlencode(params)
-        return "https://secure.splitwise.com/api/v3.0/create_expense?%s" % (paramsStr)
-
+        return f"https://secure.splitwise.com/api/v3.0/create_expense?{urllib.parse.urlencode(params)}"
 
 def main():
-    usage = "groupsplit.py [options] <path to csv file> <splitwise group name>"
+    usage = "groupsplit.py [options] <csv> <group>"
     parser = optparse.OptionParser(usage=usage)
-    parser.add_option('-v', '--verbosity', default=2, dest='verbosity', help='change the logging level (0 - 6) default: 2')
-    parser.add_option('-y','',default=False, action='store_true', dest='yes', help='split all transactions in csv without confirmation')
-    parser.add_option('-d', '--dryrun', default=False, action='store_true', dest='dryrun', help='prints requests instead of sending them')
-    parser.add_option('', '--csv-settings', default='csv_settings.pkl', dest='csv_settings', help='supply different csv_settings object (for testing mostly)')
-    parser.add_option('', '--api-client', default='oauth_client.pkl', dest='api_client', help='supply different splitwise api client (for testing mostly)')
-    parser.add_option('-a', '--all', default=False, action='store_true', dest='try_all', help='consider all transactions in csv file no matter whether they were already seen')
+    parser.add_option('-y', default=False, action='store_true', dest='yes')
+    parser.add_option('-d', '--dryrun', default=False, action='store_true', dest='dryrun')
+    parser.add_option('--csv-settings', default='csv_settings.pkl', dest='csv_settings')
+    parser.add_option('--api-client', default='oauth_client.pkl', dest='api_client')
     options, args = parser.parse_args()
-    logger.setLevel(log_levels[options.verbosity])
-    splitwise = Splitwise(options.api_client)
-    split_gen = SplitGenerator(options, args, splitwise)
-    print("Uploading splits")
-    for uri in split_gen:
+    
+    sw = Splitwise(options.api_client)
+    
+    # PRINT IDs TO TERMINAL SO YOU CAN UPDATE ID_MAP ABOVE
+    groups = sw.get_groups()
+    for g in groups:
+        if g['name'].lower() == args[1].lower():
+            print(f"\n--- Members of {g['name']} ---")
+            for m in g['members']:
+                print(f"{m['first_name']}: {m['id']}")
+            print("---------------------------\n")
+
+    gen = SplitGenerator(options, args, sw)
+    for uri in gen:
         if options.dryrun:
             print(uri)
-            continue
-        splitwise.post_expense(uri)
-    sys.stdout.write("\n")
-    sys.stdout.flush()
-
+        else:
+            sw.post_expense(uri)
 
 if __name__ == "__main__":
     main()

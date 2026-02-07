@@ -291,15 +291,28 @@ class SplitGenerator():
         assert self.options.yes or input( "Confirm submission? [y/N]" ).lower() == 'y', "User canceled submission"
 
     def __getitem__(self, index):
-        """
-        Implement an iterator for SplitGenerator
-        for every split in self.splits, emit the URI needed
-        to upload that split to Splitwise
-        """
         s = self.splits[index]
         one_cent = Money("0.01", self.csv.local_currency)
-        num_people = len(self.members) + 1
+        
+        # DYNAMIC MEMBER SELECTION
+        # We look back at the original CSV row for this split
+        # Map IDs based on the "yes" columns in your allconsol.csv
+        # Replace the dummy IDs below with your friends' actual Splitwise IDs
+        ID_MAP = {
+            4: 123456,  # Nikhil's actual Splitwise ID
+            5: 789012,  # Rose's actual Splitwise ID
+            6: 345678   # Austin's actual Splitwise ID
+        }
+        
+        active_members = []
+        original_row = self.rows[index]
+        for col_idx, sw_id in ID_MAP.items():
+            if original_row[col_idx].strip().lower() == 'yes':
+                active_members.append(sw_id)
+
+        num_people = len(active_members) + 1  # active friends + you
         base, extra = split(s['amount'], num_people)
+        
         params = {
             "payment": 'false',
             "cost": s["amount"].amount,
@@ -311,11 +324,13 @@ class SplitGenerator():
             "users__0__paid_share": s["amount"].amount,
             "users__0__owed_share": base.amount,
         }
-        for i in range(len(self.members)):
-            params['users__%s__user_id' % (i+1)] = self.members[i]
+        
+        for i, member_id in enumerate(active_members):
+            params['users__%s__user_id' % (i+1)] = member_id
             params['users__%s__paid_share' % (i+1)] = 0
             params['users__%s__owed_share' % (i+1)] = (base + one_cent).amount if extra.amount > 0 else base.amount
             extra -= one_cent
+            
         paramsStr = urllib.parse.urlencode(params)
         return "https://secure.splitwise.com/api/v3.0/create_expense?%s" % (paramsStr)
 
